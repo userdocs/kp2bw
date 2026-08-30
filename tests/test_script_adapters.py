@@ -43,6 +43,10 @@ def test_bw_serve_timeout_script() -> None:
     _run_script_main("bw_serve_timeout_test.py")
 
 
+def test_bw_serve_rate_limit_script() -> None:
+    _run_script_main("bw_serve_rate_limit_test.py")
+
+
 def test_bw_serve_teardown_script() -> None:
     _run_script_main("bw_serve_teardown_test.py")
 

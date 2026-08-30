@@ -245,6 +245,7 @@ class Converter:
     _uri_match: UriMatchValue
     _interpret_uri_syntax: bool
     _totp_pps: bool
+    _bw_rate_limit_delay_s: float
     _kp_ref_entries: list[Entry]
     _entries: dict[str, EntryValue]
     _member_reference_resolving_dict: dict[str, str]
@@ -274,6 +275,7 @@ class Converter:
         uri_match: UriMatchValue = None,
         interpret_uri_syntax: bool = True,
         totp_pps: bool = False,
+        bw_rate_limit_delay_s: float = 0.0,
     ) -> None:
         """Initialise the converter with KeePass source and Bitwarden target settings."""
         self._keepass_file_path = keepass_file_path
@@ -295,6 +297,7 @@ class Converter:
         self._uri_match = uri_match
         self._interpret_uri_syntax = interpret_uri_syntax
         self._totp_pps = totp_pps
+        self._bw_rate_limit_delay_s = max(0.0, bw_rate_limit_delay_s)
         self._kp_ref_entries = []
         self._entries = {}
         self._ref_entries_by_uuid = {}
@@ -1372,6 +1375,7 @@ class Converter:
                 self._bitwarden_password,
                 org_id=self._bitwarden_organization_id,
                 collection_id=fixed_coll_id,
+                rate_limit_delay_s=self._bw_rate_limit_delay_s,
             ) as bw,
         ):
             # --- Phase 1: Partition entries and resolve collections ----------
