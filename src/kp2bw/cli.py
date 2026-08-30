@@ -380,6 +380,17 @@ def _argparser() -> MyArgParser:
         default=None,
     )
     parser.add_argument(
+        "--bw-rate-limit",
+        dest="bw_rate_limit",
+        metavar="MS",
+        type=float,
+        help=(
+            "Minimum delay in milliseconds between bw serve API requests "
+            "(default: 1000 ms = 1 req/s; set to 0 to disable, env: KP2BW_BW_RATE_LIMIT)"
+        ),
+        default=None,
+    )
+    parser.add_argument(
         "-y",
         "--yes",
         dest="skip_confirm",
@@ -444,6 +455,7 @@ def _run_strip_ids(
     org_id: str | None,
     collection_id: str | None,
     skip_confirm: bool,
+    bw_rate_limit_delay_s: float = 0.0,
 ) -> None:
     """Remove kp2bw's ``KP2BW_ID``/``KP2BW_SYNC`` stamps from every item, then stop.
 
@@ -483,7 +495,8 @@ def _run_strip_ids(
             bitwarden_password_arg, "Please enter your Bitwarden password: "
         )
         with BitwardenServeClient(
-            bw_pw, org_id=org_id, collection_id=collection_id
+            bw_pw, org_id=org_id, collection_id=collection_id,
+            rate_limit_delay_s=bw_rate_limit_delay_s,
         ) as bw:
             result = bw.strip_field_from_items(
                 KP2BW_ID_FIELD_NAME, KP2BW_SYNC_FIELD_NAME
@@ -514,6 +527,7 @@ def _run_migrate_uris(
     skip_confirm: bool,
     uri_match: UriMatchValue,
     interpret_uri_syntax: bool,
+    bw_rate_limit_delay_s: float = 0.0,
 ) -> None:
     """Upgrade existing items: re-fold legacy URL/app custom fields into URIs.
 
@@ -539,7 +553,8 @@ def _run_migrate_uris(
             bitwarden_password_arg, "Please enter your Bitwarden password: "
         )
         with BitwardenServeClient(
-            bw_pw, org_id=org_id, collection_id=collection_id
+            bw_pw, org_id=org_id, collection_id=collection_id,
+            rate_limit_delay_s=bw_rate_limit_delay_s,
         ) as bw:
             result = bw.migrate_url_fields_to_uris(
                 plain_match=uri_match, interpret_syntax=interpret_uri_syntax
@@ -590,6 +605,7 @@ def _run_report_uris_bitwarden(
     bitwarden_password_arg: str | None,
     org_id: str | None,
     collection_id: str | None,
+    bw_rate_limit_delay_s: float = 0.0,
 ) -> None:
     """Read the live Bitwarden vault and print the URI collision report.
 
@@ -601,7 +617,8 @@ def _run_report_uris_bitwarden(
     )
     try:
         with BitwardenServeClient(
-            bw_pw, org_id=org_id, collection_id=collection_id
+            bw_pw, org_id=org_id, collection_id=collection_id,
+            rate_limit_delay_s=bw_rate_limit_delay_s,
         ) as bw:
             items = bw.list_items(organization_id=org_id, collection_id=collection_id)
     except KeyboardInterrupt:
@@ -845,6 +862,28 @@ def main() -> None:
                 _argparser().print_help()
                 sys.exit(2)
 
+    bw_rate_limit_ms: float = 1000.0
+    if args.bw_rate_limit is not None:
+        bw_rate_limit_ms = args.bw_rate_limit
+    else:
+        env_rl = os.environ.get("KP2BW_BW_RATE_LIMIT")
+        if env_rl is not None:
+            try:
+                bw_rate_limit_ms = float(env_rl)
+            except ValueError:
+                _ = sys.stderr.write(
+                    f"ERROR: Invalid float value for KP2BW_BW_RATE_LIMIT: {env_rl!r}\n\n"
+                )
+                _argparser().print_help()
+                sys.exit(2)
+    if bw_rate_limit_ms < 0:
+        _ = sys.stderr.write(
+            f"ERROR: --bw-rate-limit must be >= 0 (got {bw_rate_limit_ms})\n\n"
+        )
+        _argparser().print_help()
+        sys.exit(2)
+    bw_rate_limit_s = bw_rate_limit_ms / 1000.0
+
     # Bitwarden-only modes read no KeePass database, so the path requirement
     # (and the KeePass password prompt below) is skipped for them.
     bitwarden_only = strip_ids or migrate_uris or report_uris == "bitwarden"
@@ -913,6 +952,7 @@ def main() -> None:
             bitwarden_password_arg=args.bw_pw,
             org_id=args.bw_org,
             collection_id=args.bw_coll,
+            bw_rate_limit_delay_s=bw_rate_limit_s,
         )
         return
 
@@ -925,6 +965,7 @@ def main() -> None:
             org_id=args.bw_org,
             collection_id=args.bw_coll,
             skip_confirm=skip_confirm,
+            bw_rate_limit_delay_s=bw_rate_limit_s,
         )
         return
 
@@ -937,6 +978,7 @@ def main() -> None:
             skip_confirm=skip_confirm,
             uri_match=uri_match,
             interpret_uri_syntax=interpret_uri_syntax,
+            bw_rate_limit_delay_s=bw_rate_limit_s,
         )
         return
 
@@ -989,6 +1031,7 @@ def main() -> None:
         uri_match=uri_match,
         interpret_uri_syntax=interpret_uri_syntax,
         totp_pps=totp_pps,
+        bw_rate_limit_delay_s=bw_rate_limit_s,
     )
     try:
         failures = c.convert()

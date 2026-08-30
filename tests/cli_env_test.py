@@ -17,6 +17,7 @@ _MANAGED_ENV = (
     "KP2BW_BITWARDEN_ORG",
     "KP2BW_CREATE_FOLDERS",
     "KP2BW_TOTP_PPS",
+    "KP2BW_BW_RATE_LIMIT",
     "KP2BW_YES",
     "KP2BW_LOG_DIR",
 )
@@ -258,11 +259,103 @@ def assert_totp_pps_reaches_converter() -> None:
                 os.environ[key] = value
 
 
+def assert_bw_rate_limit_reaches_converter() -> None:
+    """`--bw-rate-limit` and KP2BW_BW_RATE_LIMIT arrive as Converter(bw_rate_limit_delay_s=...).
+
+    The value (in milliseconds) is converted to seconds before being passed to
+    the Converter.  This covers the CLI > env > default plumbing.
+    """
+    original_cwd = Path.cwd()
+    original_argv = sys.argv
+    original_handlers = list(logging.getLogger().handlers)
+    saved_env = {key: os.environ.get(key) for key in _MANAGED_ENV}
+
+    tmp = tempfile.mkdtemp()
+    try:
+        os.environ["KP2BW_KEEPASS_FILE"] = "from-env.kdbx"
+        os.environ["KP2BW_KEEPASS_PASSWORD"] = "kp-pw"
+        os.environ["KP2BW_BITWARDEN_PASSWORD"] = "bw-pw"
+        os.environ["KP2BW_YES"] = "1"
+        os.environ["KP2BW_LOG_DIR"] = tmp
+        _ = os.environ.pop("KP2BW_BW_RATE_LIMIT", None)
+        os.chdir(tmp)
+
+        def _run(argv: list[str]) -> object:
+            sys.argv = argv
+            with (
+                mock.patch.object(cli, "ensure_bw_available", lambda: None),
+                mock.patch.object(cli, "Converter", _CapturingConverter),
+            ):
+                cli.main()
+            return _CapturingConverter.captured.get("bw_rate_limit_delay_s")
+
+        # Default: 1 request per second (1000 ms).
+        got = _run(["kp2bw"])
+        if got != 1.0:
+            raise AssertionError(f"default rate limit should be 1.0 s (1000 ms), got {got!r}")
+
+        # CLI flag: 200 ms → 0.2 s.
+        got = _run(["kp2bw", "--bw-rate-limit", "200"])
+        if got != 0.2:
+            raise AssertionError(f"--bw-rate-limit 200 should give 0.2 s, got {got!r}")
+
+        # Env var: 500 ms → 0.5 s.
+        os.environ["KP2BW_BW_RATE_LIMIT"] = "500"
+        got = _run(["kp2bw"])
+        if got != 0.5:
+            raise AssertionError(
+                f"KP2BW_BW_RATE_LIMIT=500 should give 0.5 s, got {got!r}"
+            )
+
+        # CLI flag wins over env var: 100 ms → 0.1 s.
+        got = _run(["kp2bw", "--bw-rate-limit", "100"])
+        if got != 0.1:
+            raise AssertionError(
+                f"CLI flag should win over env var, got {got!r}"
+            )
+    finally:
+        sys.argv = original_argv
+        _reset_root_logging(original_handlers)
+        os.chdir(original_cwd)
+        shutil.rmtree(tmp, ignore_errors=True)
+        for key, value in saved_env.items():
+            if value is None:
+                _ = os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def assert_bw_rate_limit_negative_exits_with_error() -> None:
+    """`--bw-rate-limit -1` must exit with code 2 (argument error)."""
+    original_argv = sys.argv
+    original_handlers = list(logging.getLogger().handlers)
+
+    try:
+        sys.argv = ["kp2bw", "--bw-rate-limit", "-1"]
+        with (
+            mock.patch.object(cli, "ensure_bw_available", lambda: None),
+            mock.patch.object(cli, "Converter", _CapturingConverter),
+        ):
+            try:
+                cli.main()
+                raise AssertionError("--bw-rate-limit -1 should have exited with code 2")
+            except SystemExit as exc:
+                if exc.code != 2:
+                    raise AssertionError(
+                        f"expected exit code 2 for negative rate limit, got {exc.code}"
+                    ) from exc
+    finally:
+        sys.argv = original_argv
+        _reset_root_logging(original_handlers)
+
+
 def main() -> None:
     assert_dotenv_supplies_keepass_file()
     assert_empty_env_var_defers_to_dotenv()
     assert_org_disables_personal_folders_by_default()
     assert_totp_pps_reaches_converter()
+    assert_bw_rate_limit_reaches_converter()
+    assert_bw_rate_limit_negative_exits_with_error()
     print("cli env test passed")
 
 

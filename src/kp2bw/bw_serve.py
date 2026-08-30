@@ -627,6 +627,8 @@ class BitwardenServeClient:
     _bw_cmd: list[str]  # argv prefix for invoking bw (handles Windows shims)
     _bw_cwd: str | None  # cwd for bw subprocess calls (set for shim invocation)
     _bw_via_shell: bool  # True when bw runs through a cmd.exe wrapper
+    _rate_limit_delay_s: float  # minimum seconds between API requests (0 = off)
+    _last_request_time: float  # monotonic timestamp of the last request start
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -638,6 +640,7 @@ class BitwardenServeClient:
         *,
         org_id: str | None = None,
         collection_id: str | None = None,
+        rate_limit_delay_s: float = 0.0,
     ) -> None:
         # Resolve how to launch bw before binding sockets, installing signal
         # handlers, or spawning anything. This fails fast with an actionable
@@ -661,6 +664,8 @@ class BitwardenServeClient:
         )
         self._org_id = org_id
         self._collection_id = collection_id
+        self._rate_limit_delay_s = max(0.0, rate_limit_delay_s)
+        self._last_request_time = 0.0
 
         self._folders = {}
         self._by_uuid = {}
@@ -892,6 +897,13 @@ class BitwardenServeClient:
         that merely replays state (``/sync``, ``/unlock``); see
         :func:`send_with_retry`.
         """
+        _rate_limit = getattr(self, "_rate_limit_delay_s", 0.0)
+        if _rate_limit > 0:
+            elapsed = time.monotonic() - getattr(self, "_last_request_time", 0.0)
+            wait = _rate_limit - elapsed
+            if wait > 0:
+                time.sleep(wait)
+        self._last_request_time = time.monotonic()
         resp = send_with_retry(
             lambda: self._http.request(method, path, json=json_body, params=params),
             method=method,
